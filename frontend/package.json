@@ -1,0 +1,21 @@
+{
+  "name": "resume-match-frontend",
+  "version": "1.0.0",
+  "description": "简历匹配打分系统前端",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.3.4",
+    "vue-router": "^4.2.4",
+    "element-plus": "^2.3.8",
+    "axios": "^1.4.0",
+    "@element-plus/icons-vue": "^2.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^4.2.3",
+    "vite": "^4.4.0"
+  }
+}
