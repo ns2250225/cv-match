@@ -68,6 +68,10 @@ export default {
     return api.post('/batch-match', data)
   },
   
+  getMatchProgress(taskId) {
+    return api.get(`/match-progress/${taskId}`)
+  },
+  
   getMatchResults() {
     return api.get('/match-results')
   },

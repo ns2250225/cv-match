@@ -1,8 +1,11 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+from flask_cors import CORS
 from datetime import datetime
 import os
+import time
+import threading
+from queue import Queue
 from dotenv import load_dotenv
 from services.deepseek_service import DeepSeekService
 from services.pdf_parser import PDFParser
@@ -21,6 +24,10 @@ app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{os.path.join(database_dir, 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
+
+# 全局变量存储匹配进度
+match_progress = {}
+progress_lock = threading.Lock()
 
 # 数据库模型
 class JobDescription(db.Model):
@@ -255,6 +262,61 @@ def clear_all_match_results():
         db.session.rollback()
         return jsonify({'error': f'清除失败: {str(e)}'}), 500
 
+def _match_single_resume(job, resume, task_id, index, total):
+    """单个简历匹配任务"""
+    try:
+        # 更新进度
+        with progress_lock:
+            match_progress[task_id] = {
+                'current': index + 1,
+                'total': total,
+                'status': 'processing',
+                'current_filename': resume.filename,
+                'results': match_progress.get(task_id, {}).get('results', [])
+            }
+        
+        # 调用DeepSeek API进行匹配分析
+        deepseek_service = DeepSeekService()
+        match_result = deepseek_service.analyze_match(job.description, resume.content)
+        
+        # 保存匹配结果
+        match_record = MatchResult(
+            job_description_id=job.id,
+            resume_id=resume.id,
+            match_score=match_result.get('total_score', 0),
+            analysis_result=str(match_result)
+        )
+        db.session.add(match_record)
+        
+        result = {
+            'resume_id': resume.id,
+            'success': True,
+            'data': match_result,
+            'resume_filename': resume.filename
+        }
+        
+        # 更新结果
+        with progress_lock:
+            match_progress[task_id]['results'].append(result)
+            match_progress[task_id]['current'] = index + 1
+        
+        return result
+        
+    except Exception as e:
+        result = {
+            'resume_id': resume.id,
+            'success': False,
+            'error': str(e),
+            'resume_filename': resume.filename
+        }
+        
+        # 更新结果
+        with progress_lock:
+            match_progress[task_id]['results'].append(result)
+            match_progress[task_id]['current'] = index + 1
+        
+        return result
+
 @app.route('/api/batch-match', methods=['POST'])
 def batch_match_resumes():
     data = request.get_json()
@@ -268,56 +330,84 @@ def batch_match_resumes():
     if not job:
         return jsonify({'error': 'Job not found'}), 404
     
-    results = []
+    # 生成任务ID
+    task_id = f"match_{int(time.time())}_{job_id}"
     
-    for resume_id in resume_ids:
-        resume = Resume.query.get(resume_id)
-        if not resume:
-            results.append({
-                'resume_id': resume_id,
-                'success': False,
-                'error': 'Resume not found',
-                'resume_filename': f'Unknown (ID: {resume_id})'
-            })
-            continue
-        
-        try:
-            # 调用DeepSeek API进行匹配分析
-            deepseek_service = DeepSeekService()
-            match_result = deepseek_service.analyze_match(job.description, resume.content)
-            
-            # 保存匹配结果
-            match_record = MatchResult(
-                job_description_id=job_id,
-                resume_id=resume_id,
-                match_score=match_result.get('total_score', 0),
-                analysis_result=str(match_result)
-            )
-            db.session.add(match_record)
-            
-            results.append({
-                'resume_id': resume_id,
-                'success': True,
-                'data': match_result,
-                'resume_filename': resume.filename
-            })
-            
-        except Exception as e:
-            results.append({
-                'resume_id': resume_id,
-                'success': False,
-                'error': str(e),
-                'resume_filename': resume.filename
-            })
+    # 初始化进度
+    with progress_lock:
+        match_progress[task_id] = {
+            'current': 0,
+            'total': len(resume_ids),
+            'status': 'starting',
+            'current_filename': '',
+            'results': []
+        }
     
-    # 一次性提交所有数据库更改
-    try:
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': f'Database error: {str(e)}'}), 500
+    def run_batch_match():
+        """异步执行批量匹配"""
+        with app.app_context():
+            try:
+                # 更新状态为处理中
+                with progress_lock:
+                    match_progress[task_id]['status'] = 'processing'
+                
+                # 逐个处理简历
+                for i, resume_id in enumerate(resume_ids):
+                    resume = Resume.query.get(resume_id)
+                    if not resume:
+                        # 简历不存在
+                        result = {
+                            'resume_id': resume_id,
+                            'success': False,
+                            'error': 'Resume not found',
+                            'resume_filename': f'Unknown (ID: {resume_id})'
+                        }
+                        with progress_lock:
+                            match_progress[task_id]['results'].append(result)
+                            match_progress[task_id]['current'] = i + 1
+                        continue
+                    
+                    # 执行单个匹配
+                    _match_single_resume(job, resume, task_id, i, len(resume_ids))
+                
+                # 提交所有数据库更改
+                try:
+                    db.session.commit()
+                    # 更新状态为完成
+                    with progress_lock:
+                        match_progress[task_id]['status'] = 'completed'
+                except Exception as e:
+                    db.session.rollback()
+                    with progress_lock:
+                        match_progress[task_id]['status'] = 'error'
+                        match_progress[task_id]['error'] = f'Database error: {str(e)}'
+            
+            except Exception as e:
+                with progress_lock:
+                    match_progress[task_id]['status'] = 'error'
+                    match_progress[task_id]['error'] = f'Batch match error: {str(e)}'
     
-    return jsonify(results), 200
+    # 启动异步任务
+    thread = threading.Thread(target=run_batch_match)
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({
+        'task_id': task_id,
+        'message': '批量匹配任务已开始，请使用任务ID查询进度',
+        'total': len(resume_ids)
+    }), 202
+
+@app.route('/api/match-progress/<task_id>', methods=['GET'])
+def get_match_progress(task_id):
+    """获取匹配进度"""
+    with progress_lock:
+        progress = match_progress.get(task_id)
+    
+    if not progress:
+        return jsonify({'error': '任务不存在或已过期'}), 404
+    
+    return jsonify(progress), 200
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

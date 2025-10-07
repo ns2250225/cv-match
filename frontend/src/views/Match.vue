@@ -51,6 +51,44 @@
       </el-form>
     </el-card>
 
+    <!-- 进度显示 -->
+    <el-card v-if="matching" class="progress-card">
+      <template #header>
+        <span>匹配进度</span>
+      </template>
+      
+      <div class="progress-content">
+        <div class="progress-info">
+          <el-progress 
+            :percentage="Math.round((progress.current / progress.total) * 100)" 
+            :status="progress.status === 'error' ? 'exception' : 'success'"
+            :stroke-width="8"
+          />
+          <div class="progress-details">
+            <p>状态: {{ getStatusText(progress.status) }}</p>
+            <p>进度: {{ progress.current }}/{{ progress.total }}</p>
+            <p v-if="progress.currentFilename">当前处理: {{ progress.currentFilename }}</p>
+            <p v-if="progress.status === 'error'">错误: {{ progress.error }}</p>
+          </div>
+        </div>
+        
+        <!-- 已完成的匹配结果预览 -->
+        <div v-if="progress.results.length > 0" class="completed-results">
+          <h4>已完成匹配:</h4>
+          <div class="result-preview">
+            <el-tag 
+              v-for="result in progress.results" 
+              :key="result.resume_id"
+              :type="result.success ? 'success' : 'danger'"
+              class="result-tag"
+            >
+              {{ result.resume_filename }}: {{ result.success ? '成功' : '失败' }}
+            </el-tag>
+          </div>
+        </div>
+      </div>
+    </el-card>
+
     <!-- 匹配结果 -->
     <div v-if="results.length > 0" class="results-container">
       <h3>批量匹配结果 ({{ results.filter(r => r.success).length }}/{{ results.length }} 成功)</h3>
@@ -101,7 +139,6 @@
                     </el-tag>
                   </div>
                 </template>
-                
                 <div class="dimension-content">
                   <div class="dimension-reason">
                     <strong>打分原因:</strong> {{ dimension.reason }}
@@ -188,7 +225,16 @@ export default {
       form: {
         job_id: '',
         resume_ids: [] // 改为数组存储多个简历ID
-      }
+      },
+      currentTaskId: null,
+      progress: {
+        current: 0,
+        total: 0,
+        status: '', // starting, processing, completed, error
+        currentFilename: '',
+        results: []
+      },
+      progressInterval: null
     }
   },
   mounted() {
@@ -212,36 +258,82 @@ export default {
       this.results = []
       
       try {
-        // 使用批量匹配API
+        // 启动批量匹配任务
         const response = await api.batchMatchResumes({
           job_id: this.form.job_id,
           resume_ids: this.form.resume_ids
         })
         
-        // 处理批量匹配结果
-        this.results = response.data.map(result => {
-          if (result.success) {
-            return {
-              success: true,
-              resume_filename: result.resume_filename || `简历ID: ${result.resume_id}`,
-              data: result.data
+        // 获取任务ID
+        this.currentTaskId = response.data.task_id
+        this.progress.total = response.data.total
+        this.progress.status = 'starting'
+        
+        // 开始轮询进度
+        this.startProgressPolling()
+        
+      } catch (error) {
+        console.error('启动批量匹配错误:', error)
+        ElMessage.error(`启动批量匹配失败: ${error.message || '未知错误'}`)
+        this.matching = false
+      }
+    },
+    
+    startProgressPolling() {
+      // 清除之前的轮询
+      if (this.progressInterval) {
+        clearInterval(this.progressInterval)
+      }
+      
+      // 开始新的轮询
+      this.progressInterval = setInterval(async () => {
+        try {
+          const response = await api.getMatchProgress(this.currentTaskId)
+          this.progress = response.data
+          
+          // 更新显示结果
+          this.results = this.progress.results.map(result => {
+            if (result.success) {
+              return {
+                success: true,
+                resume_filename: result.resume_filename || `简历ID: ${result.resume_id}`,
+                data: result.data
+              }
+            } else {
+              return {
+                success: false,
+                resume_filename: result.resume_filename || `简历ID: ${result.resume_id}`,
+                error: result.error || '匹配失败'
+              }
             }
-          } else {
-            return {
-              success: false,
-              resume_filename: result.resume_filename || `简历ID: ${result.resume_id}`,
-              error: result.error || '匹配失败'
+          })
+          
+          // 检查任务状态
+          if (this.progress.status === 'completed' || this.progress.status === 'error') {
+            this.stopProgressPolling()
+            this.matching = false
+            
+            if (this.progress.status === 'completed') {
+              const successCount = this.results.filter(r => r.success).length
+              ElMessage.success(`批量匹配完成，成功 ${successCount}/${this.progress.total} 份简历`)
+            } else {
+              ElMessage.error(`批量匹配失败: ${this.progress.error || '未知错误'}`)
             }
           }
-        })
-        
-        const successCount = this.results.filter(r => r.success).length
-        ElMessage.success(`批量匹配完成，成功 ${successCount}/${this.form.resume_ids.length} 份简历`)
-      } catch (error) {
-        console.error('批量匹配错误:', error)
-        ElMessage.error(`批量匹配失败: ${error.message || '未知错误'}`)
-      } finally {
-        this.matching = false
+        } catch (error) {
+          console.error('获取进度错误:', error)
+          // 如果获取进度失败，可能是任务已完成或不存在
+          this.stopProgressPolling()
+          this.matching = false
+          ElMessage.error('获取匹配进度失败，请刷新页面查看结果')
+        }
+      }, 2000) // 每2秒轮询一次
+    },
+    
+    stopProgressPolling() {
+      if (this.progressInterval) {
+        clearInterval(this.progressInterval)
+        this.progressInterval = null
       }
     },
     getScoreColor(score) {
@@ -266,7 +358,22 @@ export default {
       if (score >= 80) return 'dimension-card-high'
       if (score >= 60) return 'dimension-card-medium'
       return 'dimension-card-low'
+    },
+    
+    getStatusText(status) {
+      const statusMap = {
+        'starting': '任务启动中',
+        'processing': '处理中',
+        'completed': '已完成',
+        'error': '错误'
+      }
+      return statusMap[status] || status
     }
+  },
+  
+  beforeUnmount() {
+    // 组件销毁时清理轮询
+    this.stopProgressPolling()
   }
 }
 </script>
@@ -278,6 +385,55 @@ export default {
 
 .header {
   margin-bottom: 20px;
+}
+
+/* 进度显示样式 */
+.progress-card {
+  margin-top: 20px;
+}
+
+.progress-content {
+  padding: 0 10px;
+}
+
+.progress-info {
+  margin-bottom: 20px;
+}
+
+.progress-details {
+  margin-top: 15px;
+  padding: 15px;
+  background-color: #f8f9fa;
+  border-radius: 6px;
+  border-left: 4px solid #409EFF;
+}
+
+.progress-details p {
+  margin: 5px 0;
+  color: #666;
+  font-size: 14px;
+}
+
+.completed-results {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.completed-results h4 {
+  margin-bottom: 10px;
+  color: #333;
+  font-size: 16px;
+}
+
+.result-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.result-tag {
+  margin: 2px;
 }
 
 .results-container {
