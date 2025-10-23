@@ -22,20 +22,24 @@
         </el-form-item>
 
         <el-form-item label="选择简历">
-          <el-select 
-            v-model="form.resume_ids" 
-            placeholder="请选择简历（可多选）" 
-            style="width: 100%"
-            multiple
+          <el-transfer
+            v-model="form.resume_ids"
+            :data="transferData"
+            :titles="['可选简历', '已选简历']"
+            :button-texts="['移除', '添加']"
+            :format="{
+              noChecked: '${total}',
+              hasChecked: '${checked}/${total}'
+            }"
             filterable
+            :filter-placeholder="'请输入简历名称搜索'"
+            style="text-align: left; display: inline-block"
           >
-            <el-option
-              v-for="resume in resumes"
-              :key="resume.id"
-              :label="resume.filename"
-              :value="resume.id"
-            />
-          </el-select>
+            <template #default="{ option }">
+              <span>{{ option.label }}</span>
+              <el-tag size="small" style="margin-left: 10px">{{ option.key }}</el-tag>
+            </template>
+          </el-transfer>
         </el-form-item>
 
         <el-form-item>
@@ -91,7 +95,19 @@
 
     <!-- 匹配结果 -->
     <div v-if="results.length > 0" class="results-container">
-      <h3>批量匹配结果 ({{ results.filter(r => r.success).length }}/{{ results.length }} 成功)</h3>
+      <div class="results-header">
+        <h3>批量匹配结果 ({{ results.filter(r => r.success).length }}/{{ results.length }} 成功)</h3>
+        <div class="sort-controls">
+          <el-button 
+            type="primary" 
+            size="small"
+            @click="sortByScore"
+            :icon="Sort"
+          >
+            按匹配度降序排列
+          </el-button>
+        </div>
+      </div>
       
       <el-card v-for="(result, index) in results" :key="index" class="result-card" style="margin-bottom: 20px;">
         <template #header>
@@ -207,18 +223,20 @@
 
 <script>
 import { ElMessage } from 'element-plus'
-import { InfoFilled } from '@element-plus/icons-vue'
+import { InfoFilled, Sort } from '@element-plus/icons-vue'
 import api from '../api'
 
 export default {
   name: 'Match',
   components: {
-    InfoFilled
+    InfoFilled,
+    Sort
   },
   data() {
     return {
       jobs: [],
       resumes: [],
+      transferData: [], // 穿梭框数据源
       matching: false,
       results: [], // 改为数组存储多个结果
       activeCollapse: ['table'], // 默认展开详细表格
@@ -249,6 +267,13 @@ export default {
         ])
         this.jobs = jobsRes.data
         this.resumes = resumesRes.data
+        
+        // 将简历数据转换为穿梭框所需的格式
+        this.transferData = this.resumes.map(resume => ({
+          key: resume.id,
+          label: resume.filename,
+          disabled: false
+        }))
       } catch (error) {
         ElMessage.error('加载数据失败')
       }
@@ -368,6 +393,21 @@ export default {
         'error': '错误'
       }
       return statusMap[status] || status
+    },
+    
+    // 按照匹配度降序排列
+    sortByScore() {
+      this.results.sort((a, b) => {
+        // 处理匹配失败的情况，将失败的结果排在后面
+        if (!a.success && !b.success) return 0
+        if (!a.success) return 1
+        if (!b.success) return -1
+        
+        // 按照匹配度降序排列
+        return b.data.total_score - a.data.total_score
+      })
+      
+      ElMessage.success('已按匹配度降序排列')
     }
   },
   
@@ -385,6 +425,29 @@ export default {
 
 .header {
   margin-bottom: 20px;
+}
+
+/* 穿梭框样式优化 */
+.el-transfer {
+  text-align: left;
+}
+
+.el-transfer-panel {
+  width: 300px;
+  height: 350px;
+}
+
+.el-transfer__buttons {
+  padding: 0 20px;
+}
+
+.el-transfer__button {
+  display: block;
+  margin: 0 auto 10px;
+}
+
+.el-transfer__button:last-child {
+  margin-bottom: 0;
 }
 
 /* 进度显示样式 */
@@ -439,9 +502,21 @@ export default {
 .results-container {
     margin-top: 20px;
     
-    h3 {
+    .results-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
       margin-bottom: 15px;
-      color: #333;
+      
+      h3 {
+        margin: 0;
+        color: #333;
+      }
+      
+      .sort-controls {
+        display: flex;
+        gap: 10px;
+      }
     }
     
     .result-card {

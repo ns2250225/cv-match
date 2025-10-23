@@ -16,9 +16,39 @@
     </div>
 
     <el-card>
-      <el-table :data="results" style="width: 100%" v-loading="loading">
+      <div class="table-header">
+        <h3>匹配结果列表</h3>
+        <div class="table-controls">
+          <div class="filter-controls">
+            <el-input
+              v-model="jobTitleFilter"
+              placeholder="请输入岗位标题进行筛选"
+              prefix-icon="Search"
+              clearable
+              @clear="clearFilter"
+              @input="filterResults"
+              style="width: 250px; margin-right: 10px;"
+            />
+          </div>
+          <div class="sort-controls">
+            <el-button 
+              type="primary" 
+              size="small" 
+              @click="sortByScore"
+              :icon="Sort"
+            >
+              按匹配度降序排列
+            </el-button>
+          </div>
+        </div>
+      </div>
+      <el-table :data="filteredResults" style="width: 100%" v-loading="loading">
         <el-table-column prop="job_title" label="岗位标题" min-width="200" />
-        <el-table-column prop="resume_filename" label="简历文件" min-width="200" />
+        <el-table-column prop="resume_filename" label="简历文件" min-width="200">
+          <template #default="scope">
+            <el-link type="primary" @click="viewPdf(scope.row)">{{ scope.row.resume_filename }}</el-link>
+          </template>
+        </el-table-column>
         <el-table-column prop="match_score" label="匹配度" width="120">
           <template #default="scope">
             <el-progress 
@@ -107,27 +137,56 @@
         <el-button @click="showDetail = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- PDF预览对话框 -->
+    <el-dialog v-model="showPdfDialog" :title="`预览简历: ${currentPdfTitle}`" width="80%" top="5vh">
+      <div class="pdf-container">
+        <iframe 
+          v-if="currentPdfUrl"
+          :src="currentPdfUrl" 
+          width="100%" 
+          height="600px"
+          frameborder="0"
+        ></iframe>
+        <div v-else class="pdf-loading">
+          <el-loading :loading="true"></el-loading>
+          <p>正在加载PDF文件...</p>
+        </div>
+      </div>
+      
+      <template #footer>
+        <el-button @click="showPdfDialog = false">关闭</el-button>
+        <el-button type="primary" @click="downloadPdf">下载简历</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script>
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, InfoFilled } from '@element-plus/icons-vue'
+import { Delete, InfoFilled, Sort, Search } from '@element-plus/icons-vue'
 import api from '../api'
 
 export default {
   name: 'Results',
   components: {
     Delete,
-    InfoFilled
+    InfoFilled,
+    Sort,
+    Search
   },
   data() {
     return {
       results: [],
+      filteredResults: [],
       loading: false,
       clearing: false,
       showDetail: false,
-      currentResult: null
+      currentResult: null,
+      jobTitleFilter: '',
+      showPdfDialog: false,
+      currentPdfUrl: '',
+      currentPdfTitle: ''
     }
   },
   mounted() {
@@ -139,6 +198,7 @@ export default {
       try {
         const response = await api.getMatchResults()
         this.results = response.data
+        this.filteredResults = [...this.results]
       } catch (error) {
         ElMessage.error('加载匹配结果失败')
       } finally {
@@ -183,7 +243,7 @@ export default {
         this.clearing = true
         await api.clearAllMatchResults()
         ElMessage.success('所有匹配结果已清除')
-        this.results = []
+        this.loadResults() // 重新加载列表
       } catch (error) {
         if (error !== 'cancel') {
           ElMessage.error('清除失败')
@@ -214,6 +274,55 @@ export default {
       if (score >= 80) return 'dimension-card-high'
       if (score >= 60) return 'dimension-card-medium'
       return 'dimension-card-low'
+    },
+    
+    // 按照匹配度降序排列
+    sortByScore() {
+      this.filteredResults.sort((a, b) => {
+        return b.match_score - a.match_score
+      })
+      
+      ElMessage.success('已按匹配度降序排列')
+    },
+    
+    // 按岗位标题筛选
+    filterResults() {
+      if (!this.jobTitleFilter.trim()) {
+        this.filteredResults = [...this.results]
+        return
+      }
+      
+      const filterText = this.jobTitleFilter.toLowerCase()
+      this.filteredResults = this.results.filter(result => 
+        result.job_title.toLowerCase().includes(filterText)
+      )
+    },
+    
+    // 清除筛选
+    clearFilter() {
+      this.jobTitleFilter = ''
+      this.filteredResults = [...this.results]
+    },
+    
+    // 查看PDF文件
+    viewPdf(result) {
+      this.currentPdfTitle = result.resume_filename
+      // 构建PDF文件的完整URL
+      this.currentPdfUrl = `http://localhost:5000/api/resume/pdf/${result.resume_filename}`
+      this.showPdfDialog = true
+    },
+    
+    // 下载PDF文件
+    downloadPdf() {
+      if (this.currentPdfUrl) {
+        // 创建一个隐藏的a标签来触发下载
+        const link = document.createElement('a')
+        link.href = this.currentPdfUrl
+        link.download = this.currentPdfTitle
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+      }
     }
   }
 }
@@ -236,6 +345,34 @@ export default {
 }
 
 .header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.table-header h3 {
+  margin: 0;
+  color: #333;
+}
+
+.table-controls {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.filter-controls {
+  display: flex;
+  align-items: center;
+}
+
+.sort-controls {
   display: flex;
   gap: 10px;
 }
@@ -422,6 +559,32 @@ export default {
 
 .suggestion-item span {
   color: #666;
+  font-size: 14px;
+}
+
+/* PDF预览对话框样式 */
+.pdf-container {
+  width: 100%;
+  height: 600px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.pdf-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #666;
+}
+
+.pdf-loading p {
+  margin-top: 15px;
   font-size: 14px;
 }
 </style>

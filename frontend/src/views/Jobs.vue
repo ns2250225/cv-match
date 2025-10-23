@@ -2,7 +2,7 @@
   <div class="jobs-container">
     <div class="header">
       <h2>岗位JD管理</h2>
-      <el-button type="primary" @click="showDialog = true">
+      <el-button type="primary" @click="openAddDialog">
         <el-icon><Plus /></el-icon>
         新增岗位
       </el-button>
@@ -12,15 +12,16 @@
       <el-table-column prop="title" label="岗位标题" min-width="200" />
       <el-table-column prop="description" label="岗位描述" min-width="300" :show-overflow-tooltip="true" />
       <el-table-column prop="created_at" label="创建时间" width="180" />
-      <el-table-column label="操作" width="120">
+      <el-table-column label="操作" width="180">
         <template #default="scope">
+          <el-button size="small" @click="editJob(scope.row)">编辑</el-button>
           <el-button size="small" type="danger" @click="deleteJob(scope.row.id)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
 
-    <!-- 新增岗位对话框 -->
-    <el-dialog v-model="showDialog" title="新增岗位" width="600px">
+    <!-- 新增/编辑岗位对话框 -->
+    <el-dialog v-model="showDialog" :title="dialogTitle" width="600px">
       <el-form :model="form" label-width="80px">
         <el-form-item label="岗位标题">
           <el-input v-model="form.title" placeholder="请输入岗位标题" />
@@ -36,7 +37,7 @@
       </el-form>
       <template #footer>
         <el-button @click="showDialog = false">取消</el-button>
-        <el-button type="primary" @click="createJob" :loading="saving">保存</el-button>
+        <el-button type="primary" @click="saveJob" :loading="saving">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -56,10 +57,17 @@ export default {
       loading: false,
       showDialog: false,
       saving: false,
+      isEdit: false,
+      currentEditId: null,
       form: {
         title: '',
         description: ''
       }
+    }
+  },
+  computed: {
+    dialogTitle() {
+      return this.isEdit ? '编辑岗位' : '新增岗位'
     }
   },
   mounted() {
@@ -95,6 +103,52 @@ export default {
       } finally {
         this.saving = false
       }
+    },
+    async updateJob() {
+      if (!this.form.title || !this.form.description) {
+        ElMessage.warning('请填写完整的岗位信息')
+        return
+      }
+
+      this.saving = true
+      try {
+        await api.updateJob(this.currentEditId, this.form)
+        ElMessage.success('岗位更新成功')
+        this.showDialog = false
+        this.form = { title: '', description: '' }
+        this.isEdit = false
+        this.currentEditId = null
+        this.loadJobs()
+      } catch (error) {
+        ElMessage.error('更新岗位失败')
+      } finally {
+        this.saving = false
+      }
+    },
+    async saveJob() {
+      if (this.isEdit) {
+        this.updateJob()
+      } else {
+        this.createJob()
+      }
+    },
+    editJob(job) {
+      this.isEdit = true
+      this.currentEditId = job.id
+      this.form = {
+        title: job.title,
+        description: job.description
+      }
+      this.showDialog = true
+    },
+    openAddDialog() {
+      this.isEdit = false
+      this.currentEditId = null
+      this.form = {
+        title: '',
+        description: ''
+      }
+      this.showDialog = true
     },
     async deleteJob(id) {
       try {

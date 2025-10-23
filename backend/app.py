@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from datetime import datetime
@@ -99,6 +99,17 @@ def delete_job(id):
     db.session.commit()
     return jsonify({'message': '删除成功'}), 200
 
+@app.route('/api/jobs/<int:id>', methods=['PUT'])
+def update_job(id):
+    job = JobDescription.query.get_or_404(id)
+    data = request.get_json()
+    
+    job.title = data.get('title', job.title)
+    job.description = data.get('description', job.description)
+    
+    db.session.commit()
+    return jsonify(job.to_dict()), 200
+
 @app.route('/api/resumes', methods=['GET'])
 def get_resumes():
     resumes = Resume.query.order_by(Resume.created_at.desc()).all()
@@ -118,10 +129,19 @@ def upload_resume():
     if not valid_files:
         return jsonify({'error': 'No valid file selected'}), 400
     
+    # 确保uploads目录存在
+    upload_dir = os.path.join(os.path.dirname(__file__), '..', 'uploads')
+    if not os.path.exists(upload_dir):
+        os.makedirs(upload_dir)
+    
     results = []
     
     for file in valid_files:
         try:
+            # 保存文件到uploads目录
+            file_path = os.path.join(upload_dir, file.filename)
+            file.save(file_path)
+            
             # 解析PDF文件
             pdf_content = PDFParser.parse_pdf(file)
             
@@ -159,6 +179,17 @@ def upload_resume():
 @app.route('/api/resumes/<int:id>', methods=['DELETE'])
 def delete_resume(id):
     resume = Resume.query.get_or_404(id)
+    
+    # 删除uploads目录中的文件
+    upload_dir = os.path.join(os.path.dirname(__file__), '..', 'uploads')
+    file_path = os.path.join(upload_dir, resume.filename)
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+        except Exception as e:
+            print(f"Error deleting file {file_path}: {str(e)}")
+    
+    # 删除数据库记录
     db.session.delete(resume)
     db.session.commit()
     return jsonify({'message': '删除成功'}), 200
@@ -408,6 +439,28 @@ def get_match_progress(task_id):
         return jsonify({'error': '任务不存在或已过期'}), 404
     
     return jsonify(progress), 200
+
+@app.route('/api/resume/pdf/<filename>', methods=['GET'])
+def get_resume_pdf(filename):
+    """获取简历PDF文件"""
+    try:
+        # 查找数据库中是否有该文件名的简历记录
+        resume = Resume.query.filter_by(filename=filename).first()
+        if not resume:
+            return jsonify({'error': '简历文件不存在'}), 404
+        
+        # 假设PDF文件存储在uploads目录下
+        upload_dir = os.path.join(os.path.dirname(__file__), '..', 'uploads')
+        file_path = os.path.join(upload_dir, filename)
+        
+        # 检查文件是否存在
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'PDF文件不存在'}), 404
+        
+        # 返回PDF文件
+        return send_file(file_path, as_attachment=False, mimetype='application/pdf')
+    except Exception as e:
+        return jsonify({'error': f'获取PDF文件失败: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

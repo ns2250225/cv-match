@@ -38,6 +38,10 @@ export default {
     return api.post('/jobs', data)
   },
   
+  updateJob(id, data) {
+    return api.put(`/jobs/${id}`, data)
+  },
+  
   deleteJob(id) {
     return api.delete(`/jobs/${id}`)
   },
