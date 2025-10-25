@@ -194,6 +194,57 @@ def delete_resume(id):
     db.session.commit()
     return jsonify({'message': '删除成功'}), 200
 
+@app.route('/api/resumes/batch', methods=['DELETE'])
+def batch_delete_resumes():
+    data = request.get_json()
+    ids = data.get('ids', [])
+    
+    if not ids:
+        return jsonify({'error': '未提供要删除的简历ID'}), 400
+    
+    # 确保uploads目录存在
+    upload_dir = os.path.join(os.path.dirname(__file__), '..', 'uploads')
+    
+    deleted_count = 0
+    errors = []
+    
+    for id in ids:
+        try:
+            resume = Resume.query.get(id)
+            if not resume:
+                errors.append(f'ID {id} 的简历不存在')
+                continue
+                
+            # 删除uploads目录中的文件
+            file_path = os.path.join(upload_dir, resume.filename)
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    print(f"Error deleting file {file_path}: {str(e)}")
+            
+            # 删除数据库记录
+            db.session.delete(resume)
+            deleted_count += 1
+        except Exception as e:
+            errors.append(f'删除ID {id} 的简历时出错: {str(e)}')
+    
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'数据库操作失败: {str(e)}'}), 500
+    
+    response_data = {
+        'message': f'成功删除 {deleted_count} 个简历',
+        'deleted_count': deleted_count
+    }
+    
+    if errors:
+        response_data['errors'] = errors
+    
+    return jsonify(response_data), 200
+
 @app.route('/api/match', methods=['POST'])
 def match_resume():
     data = request.get_json()

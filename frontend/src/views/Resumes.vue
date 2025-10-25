@@ -35,10 +35,28 @@
     <!-- 简历列表 -->
     <el-card class="list-card">
       <template #header>
-        <span>已上传简历列表</span>
+        <div class="card-header">
+          <span>已上传简历列表</span>
+          <div class="header-actions">
+            <el-button 
+              v-if="selectedResumes.length > 0" 
+              type="danger" 
+              size="small"
+              @click="batchDeleteResumes"
+            >
+              批量删除 ({{ selectedResumes.length }})
+            </el-button>
+          </div>
+        </div>
       </template>
       
-      <el-table :data="resumes" style="width: 100%" v-loading="loading">
+      <el-table 
+        :data="resumes" 
+        style="width: 100%" 
+        v-loading="loading"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="55" />
         <el-table-column prop="filename" label="文件名" min-width="200" />
         <el-table-column prop="content" label="内容预览" min-width="300" :show-overflow-tooltip="true" />
         <el-table-column prop="created_at" label="上传时间" width="180" />
@@ -63,7 +81,8 @@ export default {
   data() {
     return {
       resumes: [],
-      loading: false
+      loading: false,
+      selectedResumes: []
     }
   },
   mounted() {
@@ -129,6 +148,42 @@ export default {
           ElMessage.error('删除失败')
         }
       }
+    },
+    handleSelectionChange(selection) {
+      this.selectedResumes = selection
+    },
+    async batchDeleteResumes() {
+      if (this.selectedResumes.length === 0) {
+        ElMessage.warning('请先选择要删除的简历')
+        return
+      }
+      
+      try {
+        await ElMessageBox.confirm(
+          `确定要删除选中的 ${this.selectedResumes.length} 个简历吗？此操作不可恢复！`, 
+          '批量删除确认', 
+          {
+            type: 'warning',
+            confirmButtonText: '确定删除',
+            cancelButtonText: '取消'
+          }
+        )
+        
+        const ids = this.selectedResumes.map(resume => resume.id)
+        const response = await api.batchDeleteResumes(ids)
+        
+        ElMessage.success(response.data.message)
+        
+        // 清空选择
+        this.selectedResumes = []
+        
+        // 重新加载数据
+        this.loadResumes()
+      } catch (error) {
+        if (error !== 'cancel') {
+          ElMessage.error('批量删除失败')
+        }
+      }
     }
   }
 }
@@ -153,5 +208,16 @@ export default {
 
 .upload-demo {
   width: 100%;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
 }
 </style>

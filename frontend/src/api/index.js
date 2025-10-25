@@ -63,6 +63,10 @@ export default {
     return api.delete(`/resumes/${id}`)
   },
   
+  batchDeleteResumes(ids) {
+    return api.delete('/resumes/batch', { data: { ids } })
+  },
+  
   // 匹配相关API
   matchResume(data) {
     return api.post('/match', data)
